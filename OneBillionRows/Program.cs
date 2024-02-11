@@ -16,7 +16,7 @@ public class Program
 
     private readonly MemoryMappedFile _mmf;
 
-    private readonly Dictionary<BagKey, BagItem> _result = new();
+    private readonly Dictionary<byte[], BagItem> _result = new(new BagKeyComparer());
 
     private int _allLines;
     private long _section = -1;
@@ -60,7 +60,7 @@ public class Program
 
     private void Process()
     {
-        var dict = new Dictionary<BagKey, BagItem>();
+        var dict = new Dictionary<byte[], BagItem>(new BagKeyComparer());
         var stationBuffer = new byte[100];
         var stationSpan = new Span<byte>(stationBuffer);
         var numberSpan = new Span<byte>(new byte[16]);
@@ -115,12 +115,10 @@ public class Program
 
                             ++pCurr; // \n
 
-                            var key = new BagKey(stationBuffer, tIdx); // 10 sec
-                            if (!dict.TryGetValue(key, out var bag))
+                            if (!dict.TryGetValue(stationBuffer, out var bag))
                             {
                                 bag = new BagItem();
-                                key.Initialize();
-                                dict.Add(key, bag);
+                                dict.Add(stationSpan.ToArray(), bag);
                             }
 
                             var value = float.Parse(numberSpan.Slice(0, nIdx), CultureInfo.InvariantCulture);
@@ -157,7 +155,9 @@ public class Program
             _result
                 .Select(kvp =>
                 {
-                    var station = kvp.Key.ToString();
+                    var idx = 0;
+                    while (kvp.Key[idx] != 0) idx++;
+                    var station = Encoding.UTF8.GetString(kvp.Key, 0, idx);
                     var min = kvp.Value.Min();
                     var avg = kvp.Value.Avg();
                     var max = kvp.Value.Max();
@@ -171,54 +171,33 @@ public class Program
         return $"{{{output}}}";
     }
 
-    private class BagKey : IEquatable<BagKey>
+    private class BagKeyComparer : IEqualityComparer<byte[]>
     {
-        private readonly int _length;
-        private byte[] _buffer;
-
-        public BagKey(byte[] buffer, int length)
+        public bool Equals(byte[]? b1, byte[]? b2)
         {
-            _buffer = buffer;
-            _length = length;
-        }
+            if (ReferenceEquals(b1, b2))
+                return true;
 
+            if (b2 is null || b1 is null)
+                return false;
 
-        public bool Equals(BagKey? other)
-        {
-            if (ReferenceEquals(null, other)) return false;
-            if (ReferenceEquals(this, other)) return true;
-            if (_length != other._length) return false;
-            for (var i = 0; i < _length; ++i)
-                if (_buffer[i] != other._buffer[i])
+            var len = Math.Min(b1.Length, b2.Length);
+            for (var i = 0; i < len; ++i)
+            {
+                if (b1[i] != b2[i])
                     return false;
+                if (b1[i] == 0)
+                    return true;
+            }
+
             return true;
         }
 
-        public void Initialize()
+        public int GetHashCode(byte[] b)
         {
-            _buffer = _buffer.ToArray();
-        }
-
-        public override bool Equals(object? obj)
-        {
-            if (ReferenceEquals(null, obj)) return false;
-            if (ReferenceEquals(this, obj)) return true;
-            if (obj.GetType() != GetType()) return false;
-            return Equals((BagKey)obj);
-        }
-
-        public override int GetHashCode()
-        {
-            return _buffer[0] | (_buffer[1] << 8) | (_buffer[2] << 16) | (_buffer[3] << 24);
-        }
-
-
-        public override string ToString()
-        {
-            return Encoding.UTF8.GetString(_buffer, 0, _length);
+            return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
         }
     }
-
 
     private class BagItem
     {
