@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using System.Numerics;
@@ -12,11 +13,11 @@ public class Program
 
     private const long Overlap = 100 + 1 + 5;
 
+    private readonly ConcurrentDictionary<byte[], BagItem> _aggregate = new(new BagKeyComparer());
+
     private readonly long _fileSize;
 
     private readonly MemoryMappedFile _mmf;
-
-    private readonly Dictionary<byte[], BagItem> _result = new(new BagKeyComparer());
 
     private int _allLines;
     private long _section = -1;
@@ -138,25 +139,20 @@ public class Program
             Interlocked.Add(ref _allLines, lines);
         }
 
-        lock (_result)
+        foreach (var kvp in dict)
         {
-            foreach (var kvp in dict)
-                if (_result.TryGetValue(kvp.Key, out var bag))
-                {
-                    bag.Append(kvp.Value);
-                }
-                else
-                {
-                    bag = kvp.Value;
-                    _result.Add(kvp.Key, bag);
-                }
+            var value = _aggregate.GetOrAdd(kvp.Key, _ => new BagItem());
+            lock (value)
+            {
+                value.Append(kvp.Value);
+            }
         }
     }
 
     public string GetResult()
     {
         var outputList =
-            _result
+            _aggregate
                 .Select(kvp =>
                 {
                     var station = Encoding.UTF8.GetString(kvp.Key);
