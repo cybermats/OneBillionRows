@@ -67,7 +67,6 @@ public class Program
         var dict = new Dictionary<byte[], BagItem>(new BagKeyComparer());
         var stationBuffer = new byte[100];
         var stationSpan = new Span<byte>(stationBuffer);
-        var numberSpan = new Span<byte>(new byte[16]);
         while (true)
         {
             var lines = 0;
@@ -111,14 +110,6 @@ public class Program
                             while (*pCurr != ';')
                                 stationSpan[tIdx++] = *pCurr++;
 
-                            ++pCurr; // ;
-                            numberSpan.Clear();
-                            var nIdx = 0;
-                            while (*pCurr != '\n')
-                                numberSpan[nIdx++] = *pCurr++;
-
-                            ++pCurr; // \n
-
                             if (!dict.TryGetValue(stationBuffer, out var bag))
                             {
                                 bag = new BagItem();
@@ -126,8 +117,23 @@ public class Program
                                 dict.Add(arr, bag);
                             }
 
-                            var value = float.Parse(numberSpan.Slice(0, nIdx), CultureInfo.InvariantCulture);
-                            bag.Add(value);
+                            ++pCurr; // ;
+
+                            var sign = 1;
+                            var value = *pCurr++ - '0';
+                            if (value < 0)
+                            {
+                                sign = -1;
+                                value = 0;
+                            }
+
+                            int digit;
+                            while ((digit = *pCurr++ - '0') >= 0) value = value * 10 + digit;
+                            value = value * 10 + (*pCurr++ - '0');
+
+                            ++pCurr; // \n
+
+                            bag.Add(sign * value);
                             lines++;
                         }
 
@@ -179,7 +185,7 @@ public class Program
             if (b2 is null || b1 is null)
                 return false;
 
-            var len = Math.Min(b1.Length, b2.Length);
+            var len = Math.Min(b1!.Length, b2!.Length);
             for (var i = 0; i < len; ++i)
                 if (b1[i] != b2[i])
                     return false;
@@ -261,11 +267,11 @@ public class Program
     private class BagItem
     {
         private int _count;
-        private float _max = float.MinValue;
-        private float _min = float.MaxValue;
-        private float _total;
+        private int _max = int.MinValue;
+        private int _min = int.MaxValue;
+        private int _total;
 
-        public void Add(float value)
+        public void Add(int value)
         {
             _max = Math.Max(_max, value);
             _min = Math.Min(_min, value);
@@ -283,17 +289,17 @@ public class Program
 
         public float Max()
         {
-            return _max;
+            return _max / 10.0f;
         }
 
         public float Min()
         {
-            return _min;
+            return _min / 10.0f;
         }
 
         public float Avg()
         {
-            return _total / _count;
+            return _total / (10.0f * _count);
         }
     }
 }
