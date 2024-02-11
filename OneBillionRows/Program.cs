@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
-using System.Numerics;
 using System.Text;
 
 namespace OneBillionRows;
@@ -179,12 +178,6 @@ public class Program
     {
         public bool Equals(byte[]? b1, byte[]? b2)
         {
-            if (ReferenceEquals(b1, b2))
-                return true;
-
-            if (b2 is null || b1 is null)
-                return false;
-
             var len = Math.Min(b1!.Length, b2!.Length);
             for (var i = 0; i < len; ++i)
                 if (b1[i] != b2[i])
@@ -195,72 +188,14 @@ public class Program
         public int GetHashCode(byte[] b)
         {
             int hash = b[0];
-            var len = Math.Min(b.Length, 4);
-            for (var i = 1; i < len && b[i] != 0; i++) hash = (hash << 8) | b[i];
+            if (b.Length >= 2)
+                hash |= b[1] << 8;
+            if (b.Length >= 3)
+                hash |= b[2] << 16;
+            if (b.Length >= 4)
+                hash |= b[3] << 24;
+
             return hash;
-        }
-    }
-
-    private class BagItemSSE
-    {
-        private readonly float[] _items = new float[Vector<float>.Count];
-        private int _count;
-        public Vector<float> MaxVector { get; set; } = new(float.MinValue);
-        public Vector<float> MinVector { get; set; } = new(float.MaxValue);
-        public Vector<float> TotalVector { get; set; } = Vector<float>.Zero;
-
-        public void Add(float value)
-        {
-            _items[_count++ % Vector<float>.Count] = value;
-
-            if (_count % Vector<float>.Count == 0)
-            {
-                var va = new Vector<float>(_items);
-                MaxVector = Vector.Max(MaxVector, va);
-                MinVector = Vector.Min(MinVector, va);
-                TotalVector = Vector.Add(TotalVector, va);
-            }
-        }
-
-        public void Append(BagItemSSE other)
-        {
-            MaxVector = Vector.Max(MaxVector, other.MaxVector);
-            MinVector = Vector.Min(MinVector, other.MinVector);
-            TotalVector = Vector.Add(TotalVector, other.TotalVector);
-
-            _count += other._count - other._count % Vector<float>.Count;
-
-            for (var i = 0; i < other._count % Vector<float>.Count; ++i)
-                Add(other._items[i]);
-        }
-
-        public float Max()
-        {
-            var max = float.MinValue;
-            for (var i = 0; i < _count % Vector<float>.Count; ++i)
-                max = Math.Max(max, _items[i]);
-            for (var i = 0; i < Vector<float>.Count; ++i)
-                max = Math.Max(max, MaxVector[i]);
-            return max;
-        }
-
-        public float Min()
-        {
-            var min = float.MaxValue;
-            for (var i = 0; i < _count % Vector<float>.Count; ++i)
-                min = Math.Min(min, _items[i]);
-            for (var i = 0; i < Vector<float>.Count; ++i)
-                min = Math.Min(min, MinVector[i]);
-            return min;
-        }
-
-        public float Avg()
-        {
-            var sum = Vector.Sum(TotalVector);
-            for (var i = 0; i < _count % Vector<float>.Count; ++i)
-                sum += _items[i];
-
-            return sum / _count;
         }
     }
 
