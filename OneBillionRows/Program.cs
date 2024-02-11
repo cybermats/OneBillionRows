@@ -199,7 +199,7 @@ public class Program
         }
     }
 
-    private class BagItem
+    private class BagItemSSE
     {
         private readonly float[] _items = new float[Vector<float>.Count];
         private int _count;
@@ -220,7 +220,7 @@ public class Program
             }
         }
 
-        public void Append(BagItem other)
+        public void Append(BagItemSSE other)
         {
             MaxVector = Vector.Max(MaxVector, other.MaxVector);
             MinVector = Vector.Min(MinVector, other.MinVector);
@@ -259,6 +259,45 @@ public class Program
                 sum += _items[i];
 
             return sum / _count;
+        }
+    }
+
+    private class BagItem
+    {
+        private int _count;
+        private float _max = float.MinValue;
+        private float _min = float.MaxValue;
+        private float _total;
+
+        public void Add(float value)
+        {
+            _max = Math.Max(_max, value);
+            _min = Math.Min(_min, value);
+            _total += value;
+            _count++;
+        }
+
+        public void Append(BagItem other)
+        {
+            _max = Math.Max(_max, other._max);
+            _min = Math.Min(_min, other._min);
+            _total += other._total;
+            _count += other._count;
+        }
+
+        public float Max()
+        {
+            return _max;
+        }
+
+        public float Min()
+        {
+            return _min;
+        }
+
+        public float Avg()
+        {
+            return _total / _count;
         }
     }
 }
