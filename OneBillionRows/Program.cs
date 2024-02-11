@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using System.Numerics;
@@ -11,43 +10,30 @@ public class Program
 {
     private const long WindowsSize = 32 * 1024 * 1024;
 
-//    private const long WindowsSize = 8 * 1024;
     private const long Overlap = 100 + 1 + 5;
-    private readonly CountdownEvent _cde;
 
     private readonly long _fileSize;
 
-    private readonly ConcurrentDictionary<string, ConcurrentBag<float>> _items = new();
     private readonly MemoryMappedFile _mmf;
-    private readonly Dictionary<string, BagItem> _result = new();
 
-    private readonly int _simdLength = Vector<float>.Count;
+    private readonly Dictionary<BagKey, BagItem> _result = new();
+
     private int _allLines;
     private long _section = -1;
 
 
-    private Program(MemoryMappedFile mmf, long fileSize, int threadCount)
+    private Program(MemoryMappedFile mmf, long fileSize)
     {
         _mmf = mmf;
         _fileSize = fileSize;
-        _cde = new CountdownEvent(threadCount);
     }
 
     private long Count => _allLines;
 
-    public void Wait()
-    {
-        _cde.Wait();
-    }
-
-    public bool Signal()
-    {
-        return _cde.Signal();
-    }
-
     public static void Main()
     {
-        var path = "C:\\Users\\Mats Fredriksson\\Documents\\Code\\1brc\\measurements_1GB.txt";
+        Thread.CurrentThread.CurrentCulture = CultureInfo.CreateSpecificCulture("en-US");
+        var path = "C:\\Users\\Mats Fredriksson\\Documents\\Code\\1brc\\measurements.txt";
 
 
         var fileSize = new FileInfo(path).Length;
@@ -56,17 +42,15 @@ public class Program
         {
             var tasks = new List<Task>();
             var cores = Environment.ProcessorCount;
-            var processor = new Program(mmf, fileSize, cores);
+            var processor = new Program(mmf, fileSize);
             Console.WriteLine($"Processors: {cores}");
             stopWatch.Start();
-#if true
             for (var ctr = 0; ctr < cores; ++ctr)
                 tasks.Add(Task.Run(() => processor.Process()));
             Task.WaitAll(tasks.ToArray());
-#else
-            for (var ctr = 0; ctr < cores; ++ctr) ThreadPool.QueueUserWorkItem(ThreadMain, processor);
-            processor.Wait();
-#endif
+            var output = processor.GetResult();
+            File.WriteAllText(@"C:\Users\Mats Fredriksson\Documents\Code\OneBillionRows\OneBillionRows\Output\obr.txt",
+                output);
             stopWatch.Stop();
             Console.WriteLine($"Runtime: {stopWatch}");
 
@@ -74,16 +58,9 @@ public class Program
         }
     }
 
-    public static void ThreadMain(object? state)
-    {
-        var proc = (Program?)state;
-        proc?.Process();
-        proc?.Signal();
-    }
-
     private void Process()
     {
-        var dict = new Dictionary<string, BagItem>();
+        var dict = new Dictionary<BagKey, BagItem>();
         var stationBuffer = new byte[100];
         var stationSpan = new Span<byte>(stationBuffer);
         var numberSpan = new Span<byte>(new byte[16]);
@@ -93,7 +70,7 @@ public class Program
             var mySection = Interlocked.Increment(ref _section);
             var start = mySection * WindowsSize;
             if (start >= _fileSize)
-                return;
+                break;
 
             var length = WindowsSize + Overlap;
             if (start + length > _fileSize)
@@ -125,8 +102,6 @@ public class Program
 
                         while (pCurr < pEnd && *pCurr != 0)
                         {
-                            if (lines == 1000000 - 1)
-                                lines = 1000000 - 1;
                             stationSpan.Clear();
                             var tIdx = 0;
                             while (*pCurr != ';')
@@ -140,11 +115,12 @@ public class Program
 
                             ++pCurr; // \n
 
-                            var station = Encoding.UTF8.GetString(stationSpan.Slice(0, tIdx));
-                            if (!dict.TryGetValue(station, out var bag))
+                            var key = new BagKey(stationBuffer, tIdx); // 10 sec
+                            if (!dict.TryGetValue(key, out var bag))
                             {
                                 bag = new BagItem();
-                                dict.Add(station, bag);
+                                key.Initialize();
+                                dict.Add(key, bag);
                             }
 
                             var value = float.Parse(numberSpan.Slice(0, nIdx), CultureInfo.InvariantCulture);
@@ -159,25 +135,88 @@ public class Program
 
             Interlocked.Add(ref _allLines, lines);
         }
+
+        lock (_result)
+        {
+            foreach (var kvp in dict)
+                if (_result.TryGetValue(kvp.Key, out var bag))
+                {
+                    bag.Append(kvp.Value);
+                }
+                else
+                {
+                    bag = kvp.Value;
+                    _result.Add(kvp.Key, bag);
+                }
+        }
     }
 
     public string GetResult()
     {
         var outputList =
             _result
-                .OrderBy(kvp => kvp.Key)
                 .Select(kvp =>
                 {
+                    var station = kvp.Key.ToString();
                     var min = kvp.Value.Min();
                     var avg = kvp.Value.Avg();
                     var max = kvp.Value.Max();
                     var result = string.Create(CultureInfo.InvariantCulture,
-                        $"{kvp.Key}={min:F1}/{avg:F1}/{max:F1}");
+                        $"{station}={min:F1}/{avg:F1}/{max:F1}");
                     return result;
                 })
+                .OrderBy(i => i, StringComparer.Ordinal)
                 .ToList();
         var output = string.Join(", ", outputList);
-        return output;
+        return $"{{{output}}}";
+    }
+
+    private class BagKey : IEquatable<BagKey>
+    {
+        private readonly int _length;
+        private byte[] _buffer;
+
+        public BagKey(byte[] buffer, int length)
+        {
+            _buffer = buffer;
+            _length = length;
+        }
+
+
+        public bool Equals(BagKey? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            if (_length != other._length) return false;
+            for (var i = 0; i < _length; ++i)
+                if (_buffer[i] != other._buffer[i])
+                    return false;
+            return true;
+        }
+
+        public void Initialize()
+        {
+            _buffer = _buffer.ToArray();
+        }
+
+        public override bool Equals(object? obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            if (obj.GetType() != GetType()) return false;
+            return Equals((BagKey)obj);
+        }
+
+        public override int GetHashCode()
+        {
+            return _buffer[0] | (_buffer[1] << 8) | (_buffer[2] << 16) | (_buffer[3] << 24);
+        }
+
+
+        public override string ToString()
+        {
+            return Encoding.UTF8.GetString(_buffer, 0, _length);
+        }
     }
 
 
@@ -200,6 +239,18 @@ public class Program
                 MinVector = Vector.Min(MinVector, va);
                 TotalVector = Vector.Add(TotalVector, va);
             }
+        }
+
+        public void Append(BagItem other)
+        {
+            MaxVector = Vector.Max(MaxVector, other.MaxVector);
+            MinVector = Vector.Min(MinVector, other.MinVector);
+            TotalVector = Vector.Add(TotalVector, other.TotalVector);
+
+            _count += other._count - other._count % Vector<float>.Count;
+
+            for (var i = 0; i < other._count % Vector<float>.Count; ++i)
+                Add(other._items[i]);
         }
 
         public float Max()
