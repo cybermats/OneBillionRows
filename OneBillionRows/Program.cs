@@ -32,7 +32,6 @@ public class Program
 
     public static void Main()
     {
-        Thread.CurrentThread.CurrentCulture = CultureInfo.CreateSpecificCulture("en-US");
         var path = "C:\\Users\\Mats Fredriksson\\Documents\\Code\\1brc\\measurements.txt";
 
 
@@ -42,6 +41,10 @@ public class Program
         {
             var tasks = new List<Task>();
             var cores = Environment.ProcessorCount;
+#if (DEBUG)
+            cores = 1;
+#endif
+
             var processor = new Program(mmf, fileSize);
             Console.WriteLine($"Processors: {cores}");
             stopWatch.Start();
@@ -118,7 +121,8 @@ public class Program
                             if (!dict.TryGetValue(stationBuffer, out var bag))
                             {
                                 bag = new BagItem();
-                                dict.Add(stationSpan.ToArray(), bag);
+                                var arr = stationSpan.Slice(0, tIdx).ToArray();
+                                dict.Add(arr, bag);
                             }
 
                             var value = float.Parse(numberSpan.Slice(0, nIdx), CultureInfo.InvariantCulture);
@@ -155,9 +159,7 @@ public class Program
             _result
                 .Select(kvp =>
                 {
-                    var idx = 0;
-                    while (kvp.Key[idx] != 0) idx++;
-                    var station = Encoding.UTF8.GetString(kvp.Key, 0, idx);
+                    var station = Encoding.UTF8.GetString(kvp.Key);
                     var min = kvp.Value.Min();
                     var avg = kvp.Value.Avg();
                     var max = kvp.Value.Max();
@@ -183,19 +185,17 @@ public class Program
 
             var len = Math.Min(b1.Length, b2.Length);
             for (var i = 0; i < len; ++i)
-            {
                 if (b1[i] != b2[i])
                     return false;
-                if (b1[i] == 0)
-                    return true;
-            }
-
             return true;
         }
 
         public int GetHashCode(byte[] b)
         {
-            return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
+            int hash = b[0];
+            var len = Math.Min(b.Length, 4);
+            for (var i = 1; i < len && b[i] != 0; i++) hash = (hash << 8) | b[i];
+            return hash;
         }
     }
 
